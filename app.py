@@ -14,7 +14,7 @@ from pptx import Presentation
 from pptx.util import Emu
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 
-app = Flask(__name__, template_folder="templates/templates")
+app = Flask(__name__)
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 UPLOAD_ROOT = os.path.join(BASE_DIR, "workspace")
 os.makedirs(UPLOAD_ROOT, exist_ok=True)
