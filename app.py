@@ -243,7 +243,7 @@ def duplicate_slide(prs, template_slide):
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("templates/index.html")
 
 
 @app.route("/upload_template", methods=["POST"])
