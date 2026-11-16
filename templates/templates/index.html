@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="hi">
 <head>
@@ -11,16 +12,19 @@
     h1 { margin-top: 0; font-size: 22px; color: #1e3a8a; }
     h3 { margin-top: 0; font-size: 16px; }
     .step { border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
-    .btn { background: #2563eb; color: #fff; border: none; padding: 12px 16px; border-radius: 8px; cursor: pointer; font-size: 15px; width: 100%; margin-top: 8px; font-weight: bold; }
+    .btn { background: #2563eb; color: #fff; border: none; padding: 11px 14px; border-radius: 8px; cursor: pointer; font-size: 14px; width: 100%; margin-top: 8px; font-weight: bold; }
     .btn:disabled { background: #93c5fd; }
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    .btn-sm { flex: 1; min-width: 110px; padding: 10px; font-size: 13px; border: none; border-radius: 8px; color: #fff; font-weight: bold; cursor: pointer; }
     .slide-thumbs { display: flex; gap: 10px; overflow-x: auto; padding: 8px 0; }
-    .thumb { border: 3px solid transparent; border-radius: 6px; height: 80px; }
+    .thumb { border: 3px solid transparent; border-radius: 6px; height: 85px; cursor: pointer; }
     .thumb.active { border-color: #2563eb; }
     #canvasWrap { border: 2px dashed #94a3b8; margin-top: 10px; touch-action: none; }
     canvas { display: block; width: 100%; height: auto; touch-action: none; }
     .row { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
     label { font-size: 14px; font-weight: 600; }
     input[type="file"], select { width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; }
+    .info { background: #eff6ff; border-left: 4px solid #2563eb; padding: 8px 10px; font-size: 13px; margin-top: 8px; border-radius: 4px; }
     #status { margin-top: 12px; font-weight: bold; color: #059669; font-size: 14px; }
   </style>
 </head>
@@ -33,28 +37,48 @@
     <input type="file" id="templateFile" accept=".pptx,.pdf" />
     <button class="btn" id="loadBtn" onclick="uploadTemplate()">Template Load Karein</button>
     <div id="slideSelector" style="display:none; margin-top:12px;">
-      <p style="font-size:13px;"><b>Tile Template Slide chunein:</b> (Baaki slides safe rahengi)</p>
+      <p style="font-size:13px;"><b>Slide Preview Dekhein / Chunein:</b></p>
       <div class="slide-thumbs" id="thumbs"></div>
     </div>
   </div>
 
   <div class="step" id="frameStep" style="display:none;">
-    <h3>2. Photo Frame Set Karein (Ungli se drag karein)</h3>
+    <h3>2. Photo Boxes Set Karein</h3>
+    <label>Frame Mode:
+      <select id="boxMode" onchange="onBoxModeChange()">
+        <option value="multi">1 Page me Zyada Boxes (Multi-Tile)</option>
+        <option value="single">1 Page me Sirf 1 Box (Single-Tile)</option>
+      </select>
+    </label>
+    <div class="info" id="boxHint">
+      App ne boxes auto-detect kiye hain. Naya box jodne ke liye slide par ungli se drag karein!
+    </div>
     <div id="canvasWrap">
       <canvas id="editorCanvas"></canvas>
     </div>
-    <button class="btn" style="background:#475569;" onclick="resetAutoFrame()">Auto Frame Wapas Laayein</button>
-    <p id="frameCoords" style="font-size:12px; color:#555; margin-bottom:0;"></p>
+    <div class="btn-row">
+      <button class="btn-sm" style="background:#475569;" onclick="resetAutoFrames()">Auto Detect</button>
+      <button class="btn-sm" style="background:#d97706;" onclick="undoBox()">Last Box Hatayein</button>
+      <button class="btn-sm" style="background:#dc2626;" onclick="clearBoxes()">Sab Clear</button>
+    </div>
+    <p id="frameCoords" style="font-size:13px; font-weight:bold; color:#1e3a8a; margin-bottom:0;"></p>
   </div>
 
   <div class="step" id="photoStep" style="display:none;">
     <h3>3. Tile Photos Upload (50–100+ Photos)</h3>
     <input type="file" id="tilePhotos" accept="image/*" multiple />
     <div class="row">
+      <label>Catalog Kaise Banayein:
+        <select id="fillMode">
+          <option value="multi_fill_all">Saari Slides (Page 1 se Aakhir tak) Bharein</option>
+          <option value="multi_repeat">Sirf Chuni Hui Slide ko Repeat Karein</option>
+          <option value="single_repeat">1 Photo = 1 Alag Slide</option>
+        </select>
+      </label>
       <label><input type="checkbox" id="usePerspective" checked /> Auto Perspective Correction (Tedhi photo seedhi karein)</label>
       <label>Crop Mode:
         <select id="cropMode">
-          <option value="cover">Smart Crop (Frame poora bharein)</option>
+          <option value="cover">Smart Crop (Box poora bharein)</option>
           <option value="contain">No Crop (Poori photo rakhein)</option>
         </select>
       </label>
@@ -69,9 +93,8 @@ let sessionId = null;
 let slidesData = [];
 let activeSlideIdx = 0;
 let bgImg = new Image();
-let box = { x: 0.2, y: 0.2, w: 0.6, h: 0.6 };
-let replaceShapeIdx = "";
-let dragging = false, startX = 0, startY = 0;
+let boxes = [{ x: 0.2, y: 0.2, w: 0.6, h: 0.6 }];
+let dragging = false, startX = 0, startY = 0, previewBox = null;
 
 const canvas = document.getElementById("editorCanvas");
 const ctx = canvas.getContext("2d");
@@ -120,37 +143,75 @@ function selectSlide(idx) {
   bgImg.onload = () => {
     canvas.width = bgImg.width;
     canvas.height = bgImg.height;
-    resetAutoFrame();
+    resetAutoFrames();
   };
   bgImg.src = slidesData[idx].preview_url;
 }
 
-function resetAutoFrame() {
+function resetAutoFrames() {
   const frames = slidesData[activeSlideIdx].frames;
   if (frames && frames.length > 0) {
-    box = { x: frames[0].x, y: frames[0].y, w: frames[0].w, h: frames[0].h };
-    replaceShapeIdx = frames[0].shape_index;
+    boxes = frames.map(f => ({ x: f.x, y: f.y, w: f.w, h: f.h }));
+    if (frames.length > 1) {
+      document.getElementById("boxMode").value = "multi";
+      document.getElementById("fillMode").value = slidesData.length > 1 ? "multi_fill_all" : "multi_repeat";
+    } else {
+      document.getElementById("boxMode").value = "single";
+      document.getElementById("fillMode").value = "single_repeat";
+    }
   } else {
-    box = { x: 0.2, y: 0.15, w: 0.6, h: 0.7 };
-    replaceShapeIdx = "";
+    boxes = [{ x: 0.2, y: 0.15, w: 0.6, h: 0.7 }];
   }
+  onBoxModeChange();
+  draw();
+}
+
+function onBoxModeChange() {
+  const m = document.getElementById("boxMode").value;
+  document.getElementById("boxHint").innerText = m === "multi"
+    ? "Multi-Box Mode: Slide par har drag se naya box (1, 2, 3...) judega!"
+    : "Single Mode: Slide par drag karke 1 box set karein.";
+  if (m === "single" && boxes.length > 1) {
+    boxes = [boxes[0]];
+    draw();
+  }
+}
+
+function undoBox() {
+  if (boxes.length > 0) boxes.pop();
+  draw();
+}
+
+function clearBoxes() {
+  boxes = [];
   draw();
 }
 
 function draw() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
-  const rx = box.x * canvas.width, ry = box.y * canvas.height;
-  const rw = box.w * canvas.width, rh = box.h * canvas.height;
 
-  ctx.fillStyle = "rgba(37, 99, 235, 0.25)";
-  ctx.fillRect(rx, ry, rw, rh);
-  ctx.strokeStyle = "#ef4444";
-  ctx.lineWidth = Math.max(3, canvas.width * 0.005);
-  ctx.strokeRect(rx, ry, rw, rh);
+  const all = previewBox ? [...boxes, previewBox] : boxes;
+  all.forEach((b, idx) => {
+    const rx = b.x * canvas.width, ry = b.y * canvas.height;
+    const rw = b.w * canvas.width, rh = b.h * canvas.height;
+
+    ctx.fillStyle = "rgba(37, 99, 235, 0.24)";
+    ctx.fillRect(rx, ry, rw, rh);
+    ctx.strokeStyle = "#ef4444";
+    ctx.lineWidth = Math.max(3, canvas.width * 0.004);
+    ctx.strokeRect(rx, ry, rw, rh);
+
+    const badge = Math.max(22, canvas.width * 0.032);
+    ctx.fillStyle = "#dc2626";
+    ctx.fillRect(rx, ry, badge, badge);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `bold ${Math.round(badge * 0.65)}px Arial`;
+    ctx.fillText(String(idx + 1), rx + badge * 0.28, ry + badge * 0.72);
+  });
 
   document.getElementById("frameCoords").innerText =
-    `Frame: X=${(box.x*100).toFixed(0)}%, Y=${(box.y*100).toFixed(0)}%, W=${(box.w*100).toFixed(0)}%, H=${(box.h*100).toFixed(0)}%`;
+    `Total Boxes Set: ${boxes.length} (1 Page me ${boxes.length} tiles lagengi)`;
 }
 
 function getNormPos(clientX, clientY) {
@@ -164,20 +225,38 @@ function getNormPos(clientX, clientY) {
 function startDraw(cx, cy) {
   const p = getNormPos(cx, cy);
   startX = p.x; startY = p.y; dragging = true;
+  previewBox = { x: startX, y: startY, w: 0.02, h: 0.02 };
 }
+
 function moveDraw(cx, cy) {
   if (!dragging) return;
   const p = getNormPos(cx, cy);
-  box.x = Math.min(startX, p.x);
-  box.y = Math.min(startY, p.y);
-  box.w = Math.max(0.05, Math.abs(p.x - startX));
-  box.h = Math.max(0.05, Math.abs(p.y - startY));
+  previewBox = {
+    x: Math.min(startX, p.x),
+    y: Math.min(startY, p.y),
+    w: Math.max(0.03, Math.abs(p.x - startX)),
+    h: Math.max(0.03, Math.abs(p.y - startY))
+  };
+  draw();
+}
+
+function endDraw() {
+  if (!dragging) return;
+  dragging = false;
+  if (previewBox && previewBox.w > 0.04 && previewBox.h > 0.04) {
+    if (document.getElementById("boxMode").value === "single") {
+      boxes = [previewBox];
+    } else {
+      boxes.push(previewBox);
+    }
+  }
+  previewBox = null;
   draw();
 }
 
 canvas.addEventListener("mousedown", e => startDraw(e.clientX, e.clientY));
 canvas.addEventListener("mousemove", e => moveDraw(e.clientX, e.clientY));
-window.addEventListener("mouseup", () => dragging = false);
+window.addEventListener("mouseup", endDraw);
 
 canvas.addEventListener("touchstart", e => {
   e.preventDefault();
@@ -187,7 +266,7 @@ canvas.addEventListener("touchmove", e => {
   e.preventDefault();
   moveDraw(e.touches[0].clientX, e.touches[0].clientY);
 }, { passive: false });
-window.addEventListener("touchend", () => dragging = false);
+window.addEventListener("touchend", endDraw);
 
 function resizeImageBlob(file, maxDim = 1500) {
   return new Promise((resolve) => {
@@ -215,6 +294,7 @@ function resizeImageBlob(file, maxDim = 1500) {
 async function generateCatalog() {
   const files = document.getElementById("tilePhotos").files;
   if (!files.length) return alert("Kam se kam 1 tile photo chunein!");
+  if (!boxes.length) return alert("Kam se kam 1 photo box set karein!");
 
   const btn = document.getElementById("genBtn");
   const status = document.getElementById("status");
@@ -223,9 +303,8 @@ async function generateCatalog() {
   const fd = new FormData();
   fd.append("session_id", sessionId);
   fd.append("template_idx", activeSlideIdx);
-  fd.append("x", box.x); fd.append("y", box.y);
-  fd.append("w", box.w); fd.append("h", box.h);
-  fd.append("replace_shape_idx", replaceShapeIdx);
+  fd.append("fill_mode", document.getElementById("fillMode").value);
+  fd.append("boxes_json", JSON.stringify(boxes));
   fd.append("perspective", document.getElementById("usePerspective").checked);
   fd.append("crop_mode", document.getElementById("cropMode").value);
 
@@ -235,7 +314,7 @@ async function generateCatalog() {
     fd.append("photos", optFile);
   }
 
-  status.innerText = "Server par PowerPoint ban rahi hai, kripya intezaar karein...";
+  status.innerText = "PowerPoint ban rahi hai, kripya intezaar karein...";
   try {
     const res = await fetch("/generate", { method: "POST", body: fd });
     if (!res.ok) throw new Error("Server error");
@@ -245,7 +324,7 @@ async function generateCatalog() {
     a.href = url;
     a.download = "Tiles_Catalog_Final.pptx";
     a.click();
-    status.innerText = "Badhai ho! Aapka Tiles Catalog download ho gaya!";
+    status.innerText = "Badhai ho! Aapka Multi-Tile Catalog download ho gaya!";
   } catch (e) {
     status.innerText = "Error aaya! Agar photos 80+ hain toh 40-40 ke batch me try karein.";
   }
