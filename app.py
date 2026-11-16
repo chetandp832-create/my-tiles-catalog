@@ -1,6 +1,10 @@
-import os
+
+    
+  
+   import os
 import io
 import gc
+import json
 import uuid
 import copy
 import shutil
@@ -14,8 +18,12 @@ from pptx import Presentation
 from pptx.util import Emu
 from pptx.enum.shapes import MSO_SHAPE_TYPE, PP_PLACEHOLDER
 
-app = Flask(__name__)
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+TPL_DIR = os.path.join(BASE_DIR, "templates", "templates")
+if not os.path.exists(os.path.join(TPL_DIR, "index.html")):
+    TPL_DIR = os.path.join(BASE_DIR, "templates")
+
+app = Flask(__name__, template_folder=TPL_DIR)
 UPLOAD_ROOT = os.path.join(BASE_DIR, "workspace")
 os.makedirs(UPLOAD_ROOT, exist_ok=True)
 
@@ -30,7 +38,6 @@ def pdf_to_pptx(pdf_path, pptx_out_path):
     doc = fitz.open(pdf_path)
     prs = Presentation()
     blank_layout = min(prs.slide_layouts, key=lambda l: len(l.placeholders))
-
     first_rect = doc[0].rect
     prs.slide_width = Emu(int(first_rect.width * 12700))
     prs.slide_height = Emu(int(first_rect.height * 12700))
@@ -43,6 +50,40 @@ def pdf_to_pptx(pdf_path, pptx_out_path):
             io.BytesIO(img_bytes), 0, 0, prs.slide_width, prs.slide_height
         )
     prs.save(pptx_out_path)
+
+
+def walk_shapes_with_bounds(shapes, off_x=0.0, off_y=0.0, scale_x=1.0, scale_y=1.0, is_top=True):
+    results = []
+    for idx, shape in enumerate(shapes):
+        ax = off_x + shape.left * scale_x
+        ay = off_y + shape.top * scale_y
+        aw = shape.width * scale_x
+        ah = shape.height * scale_y
+
+        if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+            try:
+                xfrm = shape._element.grpSpPr.xfrm
+                ch_ox = float(xfrm.chOff.x) if xfrm.chOff is not None else 0.0
+                ch_oy = float(xfrm.chOff.y) if xfrm.chOff is not None else 0.0
+                ch_cx = float(xfrm.chExt.cx) if xfrm.chExt is not None and xfrm.chExt.cx else 1.0
+                ch_cy = float(xfrm.chExt.cy) if xfrm.chExt is not None and xfrm.chExt.cy else 1.0
+                sx = aw / ch_cx
+                sy = ah / ch_cy
+                results.extend(
+                    walk_shapes_with_bounds(
+                        shape.shapes,
+                        off_x=ax - ch_ox * sx,
+                        off_y=ay - ch_oy * sy,
+                        scale_x=sx,
+                        scale_y=sy,
+                        is_top=False,
+                    )
+                )
+            except Exception:
+                pass
+        else:
+            results.append((shape, ax, ay, aw, ah, is_top))
+    return results
 
 
 def render_pptx_previews(pptx_path, out_dir):
@@ -77,11 +118,11 @@ def render_pptx_previews(pptx_path, out_dir):
         canvas = Image.new("RGB", (pw, ph), (255, 255, 255))
         draw = ImageDraw.Draw(canvas)
 
-        for shape in slide.shapes:
-            x = int((shape.left / sw) * pw)
-            y = int((shape.top / sh) * ph)
-            w = max(1, int((shape.width / sw) * pw))
-            h = max(1, int((shape.height / sh) * ph))
+        for shape, ax, ay, aw, ah, _ in walk_shapes_with_bounds(slide.shapes):
+            x = int((ax / sw) * pw)
+            y = int((ay / sh) * ph)
+            w = max(1, int((aw / sw) * pw))
+            h = max(1, int((ah / sh) * ph))
 
             if shape.shape_type == MSO_SHAPE_TYPE.PICTURE:
                 try:
@@ -91,9 +132,9 @@ def render_pptx_previews(pptx_path, out_dir):
                 except Exception:
                     draw.rectangle([x, y, x + w, y + h], outline=(0, 120, 255), width=2)
             else:
-                draw.rectangle([x, y, x + w, y + h], outline=(180, 180, 180), width=1)
+                draw.rectangle([x, y, x + w, y + h], outline=(190, 190, 190), width=1)
                 if shape.has_text_frame and shape.text_frame.text.strip():
-                    txt = shape.text_frame.text.strip()[:40]
+                    txt = shape.text_frame.text.strip()[:35]
                     draw.text((x + 4, y + 4), txt, fill=(40, 40, 40))
 
         p = os.path.join(out_dir, f"slide_{idx}.png")
@@ -102,24 +143,36 @@ def render_pptx_previews(pptx_path, out_dir):
     return paths
 
 
+def is_photo_placeholder_text(txt):
+    t = txt.lower().strip()
+    return ("add" in t and ("photo" in t or "tile" in t or "image" in t)) or t in ("photo", "tile photo", "image")
+
+
 def detect_photo_frames(slide, sw, sh):
     frames = []
-    for idx, shape in enumerate(slide.shapes):
+    for shape, ax, ay, aw, ah, _ in walk_shapes_with_bounds(slide.shapes):
+        wn, hn = aw / sw, ah / sh
+        if wn > 0.90 and hn > 0.90:
+            continue
+        if wn < 0.08 or hn < 0.04:
+            continue
+
         is_pic = shape.shape_type == MSO_SHAPE_TYPE.PICTURE
         is_pic_ph = (
             shape.is_placeholder
             and shape.placeholder_format.type == PP_PLACEHOLDER.PICTURE
         )
-        if is_pic or is_pic_ph:
-            if (shape.width / sw) > 0.92 and (shape.height / sh) > 0.92:
-                continue
+        is_txt_frame = shape.has_text_frame and is_photo_placeholder_text(shape.text_frame.text)
+
+        if is_pic or is_pic_ph or is_txt_frame:
             frames.append({
-                "shape_index": idx,
-                "x": round(shape.left / sw, 5),
-                "y": round(shape.top / sh, 5),
-                "w": round(shape.width / sw, 5),
-                "h": round(shape.height / sh, 5),
+                "x": round(ax / sw, 5),
+                "y": round(ay / sh, 5),
+                "w": round(wn, 5),
+                "h": round(hn, 5),
             })
+
+    frames.sort(key=lambda f: (round(f["y"], 2), f["x"]))
     return frames
 
 
@@ -172,8 +225,8 @@ def auto_perspective_crop(img_bgr):
 def process_tile_photo(img_bytes, target_ratio, use_perspective=True, crop_mode="cover"):
     pil_img = Image.open(io.BytesIO(img_bytes))
     pil_img = ImageOps.exif_transpose(pil_img).convert("RGB")
-    if max(pil_img.size) > 1600:
-        pil_img.thumbnail((1600, 1600), Image.Resampling.LANCZOS)
+    if max(pil_img.size) > 1500:
+        pil_img.thumbnail((1500, 1500), Image.Resampling.LANCZOS)
     img_bgr = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
     if use_perspective:
@@ -241,9 +294,52 @@ def duplicate_slide(prs, template_slide):
     return new_slide
 
 
+def overlap_fraction(ax, ay, aw, ah, bx, by, bw, bh):
+    ix1, iy1 = max(ax, bx), max(ay, by)
+    ix2, iy2 = min(ax + aw, bx + bw), min(ay + ah, by + bh)
+    if ix2 <= ix1 or iy2 <= iy1:
+        return 0.0
+    inter = (ix2 - ix1) * (iy2 - iy1)
+    min_area = max(1e-9, min(aw * ah, bw * bh))
+    return inter / min_area
+
+
+def place_photo_in_box(slide, sw, sh, box, img_stream):
+    fx, fy, fw, fh = box["x"], box["y"], box["w"], box["h"]
+    spTree = slide.shapes._spTree
+    insert_pos = None
+
+    for shape, ax, ay, aw, ah, is_top in walk_shapes_with_bounds(slide.shapes):
+        nx, ny, nw, nh = ax / sw, ay / sh, aw / sw, ah / sh
+        if nw > 0.90 and nh > 0.90:
+            continue
+        if overlap_fraction(nx, ny, nw, nh, fx, fy, fw, fh) > 0.55:
+            is_pic = shape.shape_type == MSO_SHAPE_TYPE.PICTURE
+            is_pic_ph = shape.is_placeholder and shape.placeholder_format.type == PP_PLACEHOLDER.PICTURE
+            if (is_pic or is_pic_ph) and is_top:
+                el = shape._element
+                if el.getparent() == spTree:
+                    insert_pos = list(spTree).index(el)
+                    spTree.remove(el)
+            elif shape.has_text_frame and is_photo_placeholder_text(shape.text_frame.text):
+                for para in shape.text_frame.paragraphs:
+                    for run in para.runs:
+                        run.text = ""
+
+    left = Emu(int(fx * sw))
+    top = Emu(int(fy * sh))
+    width = Emu(int(fw * sw))
+    height = Emu(int(fh * sh))
+    pic_shape = slide.shapes.add_picture(img_stream, left, top, width, height)
+    if insert_pos is not None:
+        pic_el = pic_shape._element
+        spTree.remove(pic_el)
+        spTree.insert(insert_pos, pic_el)
+
+
 @app.route("/")
 def index():
-    return render_template("templates/index.html")
+    return render_template("index.html")
 
 
 @app.route("/upload_template", methods=["POST"])
@@ -296,13 +392,13 @@ def get_preview(sid, idx):
 def generate_catalog():
     sid = request.form.get("session_id")
     template_idx = int(request.form.get("template_idx", 0))
-    fx = float(request.form.get("x", 0.2))
-    fy = float(request.form.get("y", 0.2))
-    fw = float(request.form.get("w", 0.6))
-    fh = float(request.form.get("h", 0.6))
-    replace_shape_idx = request.form.get("replace_shape_idx", "")
+    fill_mode = request.form.get("fill_mode", "multi_fill_all")
     use_perspective = request.form.get("perspective", "true") == "true"
     crop_mode = request.form.get("crop_mode", "cover")
+    boxes_raw = request.form.get("boxes_json", "[]")
+    boxes = json.loads(boxes_raw)
+    if not boxes:
+        boxes = [{"x": 0.2, "y": 0.2, "w": 0.6, "h": 0.6}]
 
     photos = request.files.getlist("photos")
     if not sid or not photos:
@@ -311,61 +407,87 @@ def generate_catalog():
     sdir = get_session_dir(sid)
     pptx_path = os.path.join(sdir, "template.pptx")
     prs = Presentation(pptx_path)
-    template_slide = prs.slides[template_idx]
-
     sw, sh = prs.slide_width, prs.slide_height
-    left = Emu(int(fx * sw))
-    top = Emu(int(fy * sh))
-    width = Emu(int(fw * sw))
-    height = Emu(int(fh * sh))
-    target_ratio = (fw * sw) / max(1, (fh * sh))
 
-    new_slide_elems = []
-    for idx_p, photo in enumerate(photos):
-        raw_bytes = photo.read()
-        tile_name = os.path.splitext(photo.filename)[0]
-        processed_stream = process_tile_photo(raw_bytes, target_ratio, use_perspective, crop_mode)
-        del raw_bytes
+    if fill_mode == "multi_fill_all":
+        per_page = len(boxes)
+        total_slides = len(prs.slides)
+        p_idx = 0
 
-        nslide = duplicate_slide(prs, template_slide)
+        for s_idx in range(total_slides):
+            if p_idx >= len(photos):
+                break
+            slide = prs.slides[s_idx]
+            for b in boxes:
+                if p_idx >= len(photos):
+                    break
+                raw_bytes = photos[p_idx].read()
+                target_ratio = (b["w"] * sw) / max(1, (b["h"] * sh))
+                img_stream = process_tile_photo(raw_bytes, target_ratio, use_perspective, crop_mode)
+                del raw_bytes
+                place_photo_in_box(slide, sw, sh, b, img_stream)
+                del img_stream
+                p_idx += 1
+                if p_idx % 10 == 0:
+                    gc.collect()
 
-        for shp in nslide.shapes:
-            if shp.has_text_frame:
-                for para in shp.text_frame.paragraphs:
-                    for run in para.runs:
-                        if "{{NAME}}" in run.text:
-                            run.text = run.text.replace("{{NAME}}", tile_name)
+        # Agar photos zyada hain toh aakhri slide ko repeat karke aage lagayein
+        last_template = prs.slides[total_slides - 1]
+        while p_idx < len(photos):
+            nslide = duplicate_slide(prs, last_template)
+            for b in boxes:
+                if p_idx >= len(photos):
+                    break
+                raw_bytes = photos[p_idx].read()
+                target_ratio = (b["w"] * sw) / max(1, (b["h"] * sh))
+                img_stream = process_tile_photo(raw_bytes, target_ratio, use_perspective, crop_mode)
+                del raw_bytes
+                place_photo_in_box(nslide, sw, sh, b, img_stream)
+                del img_stream
+                p_idx += 1
+                if p_idx % 10 == 0:
+                    gc.collect()
+    else:
+        template_slide = prs.slides[template_idx]
+        per_page = 1 if fill_mode == "single_repeat" else len(boxes)
+        active_boxes = [boxes[0]] if fill_mode == "single_repeat" else boxes
 
-        spTree = nslide.shapes._spTree
-        insert_pos = None
-        if replace_shape_idx != "":
-            ridx = int(replace_shape_idx)
-            if 0 <= ridx < len(nslide.shapes):
-                old_el = nslide.shapes[ridx]._element
-                insert_pos = list(spTree).index(old_el)
-                spTree.remove(old_el)
+        new_slide_elems = []
+        for start in range(0, len(photos), per_page):
+            chunk = photos[start:start + per_page]
+            nslide = duplicate_slide(prs, template_slide)
 
-        pic_shape = nslide.shapes.add_picture(processed_stream, left, top, width, height)
-        if insert_pos is not None:
-            pic_el = pic_shape._element
-            spTree.remove(pic_el)
-            spTree.insert(insert_pos, pic_el)
+            for bi, photo in enumerate(chunk):
+                b = active_boxes[bi]
+                tile_name = os.path.splitext(photo.filename)[0]
+                if fill_mode == "single_repeat":
+                    for shp in nslide.shapes:
+                        if shp.has_text_frame:
+                            for para in shp.text_frame.paragraphs:
+                                for run in para.runs:
+                                    if "{{NAME}}" in run.text:
+                                        run.text = run.text.replace("{{NAME}}", tile_name)
 
-        del processed_stream
-        if idx_p % 10 == 0:
-            gc.collect()
+                raw_bytes = photo.read()
+                target_ratio = (b["w"] * sw) / max(1, (b["h"] * sh))
+                img_stream = process_tile_photo(raw_bytes, target_ratio, use_perspective, crop_mode)
+                del raw_bytes
+                place_photo_in_box(nslide, sw, sh, b, img_stream)
+                del img_stream
 
-        new_slide_elems.append(prs.slides._sldIdLst[-1])
+            if start % 10 == 0:
+                gc.collect()
+            new_slide_elems.append(prs.slides._sldIdLst[-1])
 
-    sldIdLst = prs.slides._sldIdLst
-    for el in new_slide_elems:
-        sldIdLst.remove(el)
-    for offset, el in enumerate(new_slide_elems):
-        sldIdLst.insert(template_idx + 1 + offset, el)
+        sldIdLst = prs.slides._sldIdLst
+        for el in new_slide_elems:
+            sldIdLst.remove(el)
+        for offset, el in enumerate(new_slide_elems):
+            sldIdLst.insert(template_idx + 1 + offset, el)
 
-    old_rId = sldIdLst[template_idx].rId
-    prs.part.drop_rel(old_rId)
-    del sldIdLst[template_idx]
+        old_rId = sldIdLst[template_idx].rId
+        prs.part.drop_rel(old_rId)
+        del sldIdLst[template_idx]
 
     out_path = os.path.join(sdir, "Tiles_Catalog_Final.pptx")
     prs.save(out_path)
