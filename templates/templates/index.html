@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Tiles Catalog Maker</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; background: #f1f5f9; margin: 0; padding: 12px; color: #1e293b; }
+    .container { max-width: 900px; margin: auto; background: #fff; padding: 16px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    h1 { margin-top: 0; font-size: 22px; color: #1e3a8a; }
+    h3 { margin-top: 0; font-size: 16px; }
+    .step { border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+    .btn { background: #2563eb; color: #fff; border: none; padding: 12px 16px; border-radius: 8px; cursor: pointer; font-size: 15px; width: 100%; margin-top: 8px; font-weight: bold; }
+    .btn:disabled { background: #93c5fd; }
+    .slide-thumbs { display: flex; gap: 10px; overflow-x: auto; padding: 8px 0; }
+    .thumb { border: 3px solid transparent; border-radius: 6px; height: 80px; }
+    .thumb.active { border-color: #2563eb; }
+    #canvasWrap { border: 2px dashed #94a3b8; margin-top: 10px; touch-action: none; }
+    canvas { display: block; width: 100%; height: auto; touch-action: none; }
+    .row { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+    label { font-size: 14px; font-weight: 600; }
+    input[type="file"], select { width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; }
+    #status { margin-top: 12px; font-weight: bold; color: #059669; font-size: 14px; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>AI Tiles Catalog Maker</h1>
+
+  <div class="step">
+    <h3>1. Template Upload (PPTX ya PDF)</h3>
+    <input type="file" id="templateFile" accept=".pptx,.pdf" />
+    <button class="btn" id="loadBtn" onclick="uploadTemplate()">Template Load Karein</button>
+    <div id="slideSelector" style="display:none; margin-top:12px;">
+      <p style="font-size:13px;"><b>Tile Template Slide chunein:</b> (Baaki slides safe rahengi)</p>
+      <div class="slide-thumbs" id="thumbs"></div>
+    </div>
+  </div>
+
+  <div class="step" id="frameStep" style="display:none;">
+    <h3>2. Photo Frame Set Karein (Ungli se drag karein)</h3>
+    <div id="canvasWrap">
+      <canvas id="editorCanvas"></canvas>
+    </div>
+    <button class="btn" style="background:#475569;" onclick="resetAutoFrame()">Auto Frame Wapas Laayein</button>
+    <p id="frameCoords" style="font-size:12px; color:#555; margin-bottom:0;"></p>
+  </div>
+
+  <div class="step" id="photoStep" style="display:none;">
+    <h3>3. Tile Photos Upload (50–100+ Photos)</h3>
+    <input type="file" id="tilePhotos" accept="image/*" multiple />
+    <div class="row">
+      <label><input type="checkbox" id="usePerspective" checked /> Auto Perspective Correction (Tedhi photo seedhi karein)</label>
+      <label>Crop Mode:
+        <select id="cropMode">
+          <option value="cover">Smart Crop (Frame poora bharein)</option>
+          <option value="contain">No Crop (Poori photo rakhein)</option>
+        </select>
+      </label>
+    </div>
+    <button class="btn" id="genBtn" onclick="generateCatalog()">Catalog Banayein & Download Karein</button>
+    <div id="status"></div>
+  </div>
+</div>
+
+<script>
+let sessionId = null;
+let slidesData = [];
+let activeSlideIdx = 0;
+let bgImg = new Image();
+let box = { x: 0.2, y: 0.2, w: 0.6, h: 0.6 };
+let replaceShapeIdx = "";
+let dragging = false, startX = 0, startY = 0;
+
+const canvas = document.getElementById("editorCanvas");
+const ctx = canvas.getContext("2d");
+
+async function uploadTemplate() {
+  const f = document.getElementById("templateFile").files[0];
+  if (!f) return alert("Pehle PPTX ya PDF file chunein!");
+  const btn = document.getElementById("loadBtn");
+  btn.disabled = true;
+  btn.innerText = "Load ho raha hai...";
+
+  const fd = new FormData();
+  fd.append("template", f);
+
+  try {
+    const res = await fetch("/upload_template", { method: "POST", body: fd });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    sessionId = data.session_id;
+    slidesData = data.slides;
+    const thumbs = document.getElementById("thumbs");
+    thumbs.innerHTML = "";
+    slidesData.forEach((s, i) => {
+      const img = document.createElement("img");
+      img.src = s.preview_url;
+      img.className = "thumb" + (i === 0 ? " active" : "");
+      img.onclick = () => selectSlide(i);
+      thumbs.appendChild(img);
+    });
+
+    document.getElementById("slideSelector").style.display = "block";
+    document.getElementById("frameStep").style.display = "block";
+    document.getElementById("photoStep").style.display = "block";
+    selectSlide(0);
+  } catch (err) {
+    alert("Error: " + err.message);
+  }
+  btn.disabled = false;
+  btn.innerText = "Template Load Karein";
+}
+
+function selectSlide(idx) {
+  activeSlideIdx = idx;
+  document.querySelectorAll(".thumb").forEach((el, i) => el.classList.toggle("active", i === idx));
+  bgImg.onload = () => {
+    canvas.width = bgImg.width;
+    canvas.height = bgImg.height;
+    resetAutoFrame();
+  };
+  bgImg.src = slidesData[idx].preview_url;
+}
+
+function resetAutoFrame() {
+  const frames = slidesData[activeSlideIdx].frames;
+  if (frames && frames.length > 0) {
+    box = { x: frames[0].x, y: frames[0].y, w: frames[0].w, h: frames[0].h };
+    replaceShapeIdx = frames[0].shape_index;
+  } else {
+    box = { x: 0.2, y: 0.15, w: 0.6, h: 0.7 };
+    replaceShapeIdx = "";
+  }
+  draw();
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+  const rx = box.x * canvas.width, ry = box.y * canvas.height;
+  const rw = box.w * canvas.width, rh = box.h * canvas.height;
+
+  ctx.fillStyle = "rgba(37, 99, 235, 0.25)";
+  ctx.fillRect(rx, ry, rw, rh);
+  ctx.strokeStyle = "#ef4444";
+  ctx.lineWidth = Math.max(3, canvas.width * 0.005);
+  ctx.strokeRect(rx, ry, rw, rh);
+
+  document.getElementById("frameCoords").innerText =
+    `Frame: X=${(box.x*100).toFixed(0)}%, Y=${(box.y*100).toFixed(0)}%, W=${(box.w*100).toFixed(0)}%, H=${(box.h*100).toFixed(0)}%`;
+}
+
+function getNormPos(clientX, clientY) {
+  const r = canvas.getBoundingClientRect();
+  return {
+    x: Math.max(0, Math.min(1, (clientX - r.left) / r.width)),
+    y: Math.max(0, Math.min(1, (clientY - r.top) / r.height))
+  };
+}
+
+function startDraw(cx, cy) {
+  const p = getNormPos(cx, cy);
+  startX = p.x; startY = p.y; dragging = true;
+}
+function moveDraw(cx, cy) {
+  if (!dragging) return;
+  const p = getNormPos(cx, cy);
+  box.x = Math.min(startX, p.x);
+  box.y = Math.min(startY, p.y);
+  box.w = Math.max(0.05, Math.abs(p.x - startX));
+  box.h = Math.max(0.05, Math.abs(p.y - startY));
+  draw();
+}
+
+canvas.addEventListener("mousedown", e => startDraw(e.clientX, e.clientY));
+canvas.addEventListener("mousemove", e => moveDraw(e.clientX, e.clientY));
+window.addEventListener("mouseup", () => dragging = false);
+
+canvas.addEventListener("touchstart", e => {
+  e.preventDefault();
+  startDraw(e.touches[0].clientX, e.touches[0].clientY);
+}, { passive: false });
+canvas.addEventListener("touchmove", e => {
+  e.preventDefault();
+  moveDraw(e.touches[0].clientX, e.touches[0].clientY);
+}, { passive: false });
+window.addEventListener("touchend", () => dragging = false);
+
+function resizeImageBlob(file, maxDim = 1500) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let w = img.width, h = img.height;
+      if (Math.max(w, h) <= maxDim) return resolve(file);
+      const scale = maxDim / Math.max(w, h);
+      w = Math.round(w * scale);
+      h = Math.round(h * scale);
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
+      c.toBlob((blob) => {
+        resolve(new File([blob], file.name, { type: "image/jpeg" }));
+      }, "image/jpeg", 0.90);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
+async function generateCatalog() {
+  const files = document.getElementById("tilePhotos").files;
+  if (!files.length) return alert("Kam se kam 1 tile photo chunein!");
+
+  const btn = document.getElementById("genBtn");
+  const status = document.getElementById("status");
+  btn.disabled = true;
+
+  const fd = new FormData();
+  fd.append("session_id", sessionId);
+  fd.append("template_idx", activeSlideIdx);
+  fd.append("x", box.x); fd.append("y", box.y);
+  fd.append("w", box.w); fd.append("h", box.h);
+  fd.append("replace_shape_idx", replaceShapeIdx);
+  fd.append("perspective", document.getElementById("usePerspective").checked);
+  fd.append("crop_mode", document.getElementById("cropMode").value);
+
+  for (let i = 0; i < files.length; i++) {
+    status.innerText = `Photo ${i + 1} / ${files.length} tayyar ho rahi hai...`;
+    const optFile = await resizeImageBlob(files[i]);
+    fd.append("photos", optFile);
+  }
+
+  status.innerText = "Server par PowerPoint ban rahi hai, kripya intezaar karein...";
+  try {
+    const res = await fetch("/generate", { method: "POST", body: fd });
+    if (!res.ok) throw new Error("Server error");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "Tiles_Catalog_Final.pptx";
+    a.click();
+    status.innerText = "Badhai ho! Aapka Tiles Catalog download ho gaya!";
+  } catch (e) {
+    status.innerText = "Error aaya! Agar photos 80+ hain toh 40-40 ke batch me try karein.";
+  }
+  btn.disabled = false;
+}
+</script>
+</body>
+</html>
