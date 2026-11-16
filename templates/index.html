@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Tiles Catalog Maker</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; background: #f1f5f9; margin: 0; padding: 12px; color: #1e293b; }
+    .container { max-width: 900px; margin: auto; background: #fff; padding: 16px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+    h1 { margin-top: 0; font-size: 22px; color: #1e3a8a; }
+    h3 { margin-top: 0; font-size: 16px; }
+    .step { border: 1px solid #e2e8f0; border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+    .btn { background: #2563eb; color: #fff; border: none; padding: 11px 14px; border-radius: 8px; cursor: pointer; font-size: 14px; width: 100%; margin-top: 8px; font-weight: bold; }
+    .btn:disabled { background: #93c5fd; }
+    .btn-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 8px; }
+    .btn-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 8px; }
+    .btn-sm { padding: 10px 4px; font-size: 12px; border: none; border-radius: 8px; color: #fff; font-weight: bold; cursor: pointer; background: #334155; }
+    .slide-thumbs { display: flex; gap: 10px; overflow-x: auto; padding: 8px 0; }
+    .thumb { border: 3px solid transparent; border-radius: 6px; height: 85px; cursor: pointer; }
+    .thumb.active { border-color: #2563eb; }
+    #canvasWrap, #cropWrap { border: 2px dashed #94a3b8; margin-top: 10px; }
+    canvas { display: block; width: 100%; height: auto; }
+    #cropCanvas { touch-action: none; }
+    .row { display: flex; flex-direction: column; gap: 10px; margin-top: 10px; }
+    label { font-size: 14px; font-weight: 600; display: block; margin-top: 6px; }
+    input[type="file"], select { width: 100%; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; margin-top: 4px; }
+    .info { background: #eff6ff; border-left: 4px solid #2563eb; padding: 8px 10px; font-size: 13px; margin-top: 8px; border-radius: 4px; }
+    .adj-box { background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; margin-top: 10px; }
+    #status { margin-top: 12px; font-weight: bold; color: #059669; font-size: 14px; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h1>AI Tiles Catalog Maker</h1>
+
+  <div class="step">
+    <h3>1. Template Upload (PPTX ya PDF)</h3>
+    <input type="file" id="templateFile" accept=".pptx,.pdf" />
+    <button class="btn" id="loadBtn" onclick="uploadTemplate()">Template Load Karein</button>
+    <div id="slideSelector" style="display:none; margin-top:12px;">
+      <p style="font-size:13px; margin:4px 0;"><b>Slide Preview Dekhein / Chunein:</b></p>
+      <div class="slide-thumbs" id="thumbs"></div>
+    </div>
+  </div>
+
+  <div class="step" id="frameStep" style="display:none;">
+    <h3>2. Photo Frame Set Karein (Auto Frame Fit + Fine Adjust)</h3>
+    <label>
+      <input type="checkbox" id="autoFrameFit" checked /> Auto Frame Fit (Har slide ke boxes apne-aap exact fit karein)
+    </label>
+    <label>Frame Mode:
+      <select id="boxMode" onchange="onBoxModeChange()">
+        <option value="multi">1 Page me Zyada Boxes (Multi-Tile)</option>
+        <option value="single">1 Page me Sirf 1 Box (Single-Tile)</option>
+      </select>
+    </label>
+
+    <div class="info" id="boxHint">
+      Box par tap karke select karein aur neeche Fine Adjust buttons se millimeter set karein!
+    </div>
+
+    <div id="canvasWrap">
+      <canvas id="editorCanvas"></canvas>
+    </div>
+
+    <div class="adj-box">
+      <label style="margin-top:0;">Kaunsa Box Adjust Karna Hai:
+        <select id="adjustTarget" onchange="draw()">
+          <option value="all">Sabhi Boxes Ek Saath (All)</option>
+        </select>
+      </label>
+
+      <div class="btn-row">
+        <button class="btn-sm" onclick="nudge(-0.004, 0, 0, 0)">⬅️ Left</button>
+        <button class="btn-sm" onclick="nudge(0, -0.004, 0, 0)">⬆️ Up</button>
+        <button class="btn-sm" onclick="nudge(0, 0.004, 0, 0)">⬇️ Down</button>
+        <button class="btn-sm" onclick="nudge(0.004, 0, 0, 0)">➡️ Right</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn-sm" style="background:#0f766e;" onclick="nudge(0, 0, -0.005, 0)">W -</button>
+        <button class="btn-sm" style="background:#0f766e;" onclick="nudge(0, 0, 0.005, 0)">W +</button>
+        <button class="btn-sm" style="background:#0f766e;" onclick="nudge(0, 0, 0, -0.005)">H -</button>
+        <button class="btn-sm" style="background:#0f766e;" onclick="nudge(0, 0, 0, 0.005)">H +</button>
+      </div>
+      <div class="btn-3">
+        <button class="btn-sm" style="background:#7c3aed;" onclick="nudge(0.003, 0.003, -0.006, -0.006)">🔲 Border Fit</button>
+        <button class="btn-sm" style="background:#7c3aed;" onclick="nudge(-0.003, -0.003, 0.006, 0.006)">⬜ Expand</button>
+        <button class="btn-sm" style="background:#475569;" onclick="resetAutoFrames()">🎯 Auto Reset</button>
+      </div>
+      <div class="btn-3">
+        <button class="btn-sm" id="drawToggleBtn" style="background:#0284c7;" onclick="toggleDrawMode()">✏️ Draw: OFF</button>
+        <button class="btn-sm" style="background:#d97706;" onclick="undoBox()">Undo Box</button>
+        <button class="btn-sm" style="background:#dc2626;" onclick="clearBoxes()">Sab Clear</button>
+      </div>
+    </div>
+    <p id="frameCoords" style="font-size:13px; font-weight:bold; color:#1e3a8a; margin-bottom:0;"></p>
+  </div>
+
+  <div class="step" id="photoStep" style="display:none;">
+    <h3>3. Tile Photos Upload & Crop (50–100+ Photos)</h3>
+    <input type="file" id="tilePhotos" accept="image/*" multiple onchange="onPhotosSelected()" />
+
+    <div id="cropToggleArea" style="display:none; margin-top:10px;">
+      <button class="btn" style="background:#0f766e;" onclick="toggleCropEditor()">✂️ Photos Crop Check / 4-Corner Fix Karein</button>
+    </div>
+
+    <div class="adj-box" id="cropEditorPanel" style="display:none;">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <b id="cropCounter">Photo 1 / 1</b>
+        <span id="cropSavedBadge" style="font-size:12px; color:#16a34a; font-weight:bold;"></span>
+      </div>
+      <p style="font-size:12px; color:#475569; margin:4px 0;">4 kone pakad kar tile par rakhein (ya "Apply All" se sab par lagayein):</p>
+      <div id="cropWrap"><canvas id="cropCanvas"></canvas></div>
+      <div class="btn-3">
+        <button class="btn-sm" onclick="stepCropPhoto(-1)">⬅️ Prev</button>
+        <button class="btn-sm" style="background:#7c3aed;" onclick="autoDetectCurrentCrop()">🎯 Auto Detect</button>
+        <button class="btn-sm" onclick="stepCropPhoto(1)">Next ➡️</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn-sm" style="background:#475569;" onclick="resetFullCrop()">🖼️ Full</button>
+        <button class="btn-sm" style="background:#0284c7;" onclick="applyCropToAll()">📋 Apply All</button>
+        <button class="btn-sm" style="background:#16a34a;" onclick="saveAndNextCrop()">✅ Save</button>
+        <button class="btn-sm" style="background:#dc2626;" onclick="toggleCropEditor()">Band</button>
+      </div>
+    </div>
+
+    <div class="row">
+      <label>Catalog Kaise Banayein:
+        <select id="fillMode">
+          <option value="multi_fill_all">Saari Slides (Page 1 se Aakhir tak) Bharein</option>
+          <option value="multi_repeat">Sirf Chuni Hui Slide ko Repeat Karein</option>
+          <option value="single_repeat">1 Photo = 1 Alag Slide</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="usePerspective" checked /> Auto Perspective Correction (Camera wali tedhi photo seedhi karein)</label>
+      <div style="font-size:12px; color:#475569;">(Tip: Agar tiles pehle se seedhi/studio photo hain toh upar wala tick hata dein)</div>
+      <label>Crop Mode:
+        <select id="cropMode">
+          <option value="cover">Smart Crop (Box poora bharein)</option>
+          <option value="contain">No Crop (Poori photo rakhein)</option>
+        </select>
+      </label>
+    </div>
+    <button class="btn" id="genBtn" onclick="generateCatalog()">Catalog Banayein & Download Karein</button>
+    <div id="status"></div>
+  </div>
+</div>
+
+<script>
+let sessionId = null;
+let slidesData = [];
+let activeSlideIdx = 0;
+let bgImg = new Image();
+let autoBaseBoxes = [];
+let boxes = [{ x: 0.2, y: 0.2, w: 0.6, h: 0.6 }];
+let drawMode = false;
+let dragging = false, startX = 0, startY = 0, previewBox = null;
+
+const canvas = document.getElementById("editorCanvas");
+const ctx = canvas.getContext("2d");
+
+async function uploadTemplate() {
+  const f = document.getElementById("templateFile").files[0];
+  if (!f) return alert("Pehle PPTX ya PDF file chunein!");
+  const btn = document.getElementById("loadBtn");
+  btn.disabled = true;
+  btn.innerText = "Load ho raha hai...";
+
+  const fd = new FormData();
+  fd.append("template", f);
+
+  try {
+    const res = await fetch("/upload_template", { method: "POST", body: fd });
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    sessionId = data.session_id;
+    slidesData = data.slides;
+    const thumbs = document.getElementById("thumbs");
+    thumbs.innerHTML = "";
+    slidesData.forEach((s, i) => {
+      const img = document.createElement("img");
+      img.src = s.preview_url;
+      img.className = "thumb" + (i === 0 ? " active" : "");
+      img.onclick = () => selectSlide(i);
+      thumbs.appendChild(img);
+    });
+
+    document.getElementById("slideSelector").style.display = "block";
+    document.getElementById("frameStep").style.display = "block";
+    document.getElementById("photoStep").style.display = "block";
+    selectSlide(0);
+  } catch (err) {
+    alert("Error: " + err.message);
+  }
+  btn.disabled = false;
+  btn.innerText = "Template Load Karein";
+}
+
+function selectSlide(idx) {
+  activeSlideIdx = idx;
+  document.querySelectorAll(".thumb").forEach((el, i) => el.classList.toggle("active", i === idx));
+  bgImg.onload = () => {
+    canvas.width = bgImg.width;
+    canvas.height = bgImg.height;
+    resetAutoFrames();
+  };
+  bgImg.src = slidesData[idx].preview_url;
+}
+
+function updateAdjustDropdown() {
+  const sel = document.getElementById("adjustTarget");
+  const prev = sel.value;
+  sel.innerHTML = '<option value="all">Sabhi Boxes Ek Saath (All)</option>';
+  boxes.forEach((_, i) => {
+    const opt = document.createElement("option");
+    opt.value = String(i);
+    opt.innerText = `Box #${i + 1}`;
+    sel.appendChild(opt);
+  });
+  if (prev === "all" || (Number(prev) >= 0 && Number(prev) < boxes.length)) sel.value = prev;
+}
+
+function setDrawMode(on) {
+  drawMode = on;
+  const btn = document.getElementById("drawToggleBtn");
+  btn.innerText = drawMode ? "✏️ Draw: ON" : "✏️ Draw: OFF";
+  btn.style.background = drawMode ? "#16a34a" : "#0284c7";
+  canvas.style.touchAction = drawMode ? "none" : "auto";
+}
+
+function toggleDrawMode() { setDrawMode(!drawMode); }
+
+function resetAutoFrames() {
+  const frames = slidesData[activeSlideIdx].frames;
+  if (frames && frames.length > 0) {
+    autoBaseBoxes = frames.map(f => ({ x: f.x, y: f.y, w: f.w, h: f.h }));
+    boxes = frames.map(f => ({ x: f.x, y: f.y, w: f.w, h: f.h }));
+    if (frames.length > 1) {
+      document.getElementById("boxMode").value = "multi";
+      document.getElementById("fillMode").value = slidesData.length > 1 ? "multi_fill_all" : "multi_repeat";
+    } else {
+      document.getElementById("boxMode").value = "single";
+      document.getElementById("fillMode").value = "single_repeat";
+    }
+    setDrawMode(false);
+  } else {
+    autoBaseBoxes = [];
+    boxes = [{ x: 0.2, y: 0.15, w: 0.6, h: 0.7 }];
+    setDrawMode(true);
+  }
+  updateAdjustDropdown();
+  onBoxModeChange();
+  draw();
+}
+
+function onBoxModeChange() {
+  const m = document.getElementById("boxMode").value;
+  if (m === "single" && boxes.length > 1) {
+    boxes = [boxes[0]];
+    updateAdjustDropdown();
+    draw();
+  }
+}
+
+function nudge(dx, dy, dw, dh) {
+  const target = document.getElementById("adjustTarget").value;
+  boxes.forEach((b, i) => {
+    if (target === "all" || Number(target) === i) {
+      b.x = Math.max(0, Math.min(0.95, b.x + dx));
+      b.y = Math.max(0, Math.min(0.95, b.y + dy));
+      b.w = Math.max(0.03, Math.min(1, b.w + dw));
+      b.h = Math.max(0.03, Math.min(1, b.h + dh));
+    }
+  });
+  draw();
+}
+
+function undoBox() { if (boxes.length > 0) boxes.pop(); updateAdjustDropdown(); draw(); }
+function clearBoxes() { boxes = []; setDrawMode(true); updateAdjustDropdown(); draw(); }
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bgImg, 0, 0, canvas.width, canvas.height);
+
+  const sel = document.getElementById("adjustTarget").value;
+  const all = previewBox ? [...boxes, previewBox] : boxes;
+
+  all.forEach((b, idx) => {
+    const isSel = sel === "all" || Number(sel) === idx;
+    const rx = b.x * canvas.width, ry = b.y * canvas.height;
+    const rw = b.w * canvas.width, rh = b.h * canvas.height;
+
+    ctx.fillStyle = isSel ? "rgba(22, 163, 74, 0.22)" : "rgba(37, 99, 235, 0.18)";
+    ctx.fillRect(rx, ry, rw, rh);
+    ctx.strokeStyle = isSel ? "#16a34a" : "#ef4444";
+    ctx.lineWidth = Math.max(3, canvas.width * 0.004);
+    ctx.strokeRect(rx, ry, rw, rh);
+
+    const badge = Math.max(22, canvas.width * 0.032);
+    ctx.fillStyle = isSel ? "#15803d" : "#dc2626";
+    ctx.fillRect(rx, ry, badge, badge);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = `bold ${Math.round(badge * 0.65)}px Arial`;
+    ctx.fillText(String(idx + 1), rx + badge * 0.28, ry + badge * 0.72);
+  });
+
+  document.getElementById("frameCoords").innerText =
+    `Total Boxes: ${boxes.length} (Tap karke select karein ya buttons se adjust karein)`;
+}
+
+function getNormPos(el, clientX, clientY) {
+  const r = el.getBoundingClientRect();
+  return {
+    x: Math.max(0, Math.min(1, (clientX - r.left) / r.width)),
+    y: Math.max(0, Math.min(1, (clientY - r.top) / r.height))
+  };
+}
+
+function selectBoxAt(nx, ny) {
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    const b = boxes[i];
+    if (nx >= b.x && nx <= b.x + b.w && ny >= b.y && ny <= b.y + b.h) {
+      document.getElementById("adjustTarget").value = String(i);
+      draw();
+      return;
+    }
+  }
+}
+
+function startDraw(cx, cy) {
+  const p = getNormPos(canvas, cx, cy);
+  if (!drawMode) return selectBoxAt(p.x, p.y);
+  startX = p.x; startY = p.y; dragging = true;
+  previewBox = { x: startX, y: startY, w: 0.02, h: 0.02 };
+}
+
+function moveDraw(cx, cy) {
+  if (!drawMode || !dragging) return;
+  const p = getNormPos(canvas, cx, cy);
+  previewBox = {
+    x: Math.min(startX, p.x), y: Math.min(startY, p.y),
+    w: Math.max(0.03, Math.abs(p.x - startX)), h: Math.max(0.03, Math.abs(p.y - startY))
+  };
+  draw();
+}
+
+function endDraw() {
+  if (!dragging) return;
+  dragging = false;
+  if (previewBox && previewBox.w > 0.04 && previewBox.h > 0.04) {
+    if (document.getElementById("boxMode").value === "single") boxes = [previewBox];
+    else boxes.push(previewBox);
+    updateAdjustDropdown();
+  }
+  previewBox = null;
+  draw();
+}
+
+canvas.addEventListener("mousedown", e => startDraw(e.clientX, e.clientY));
+canvas.addEventListener("mousemove", e => moveDraw(e.clientX, e.clientY));
+window.addEventListener("mouseup", endDraw);
+canvas.addEventListener("touchstart", e => { if (drawMode) e.preventDefault(); startDraw(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+canvas.addEventListener("touchmove", e => { if (!drawMode) return; e.preventDefault(); moveDraw(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+window.addEventListener("touchend", endDraw);
+
+let manualCorners = {};
+let cropIdx = 0;
+let cropImg = new Image();
+let curCorners = [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]];
+let activeCorner = -1;
+const cropCanvas = document.getElementById("cropCanvas");
+const cropCtx = cropCanvas.getContext("2d");
+
+function onPhotosSelected() {
+  manualCorners = {};
+  cropIdx = 0;
+  const files = document.getElementById("tilePhotos").files;
+  document.getElementById("cropToggleArea").style.display = files.length ? "block" : "none";
+  document.getElementById("cropEditorPanel").style.display = "none";
+}
+
+function toggleCropEditor() {
+  const panel = document.getElementById("cropEditorPanel");
+  if (panel.style.display === "none") {
+    panel.style.display = "block";
+    loadCropPhoto(cropIdx);
+  } else {
+    panel.style.display = "none";
+  }
+}
+
+function stepCropPhoto(delta) {
+  const files = document.getElementById("tilePhotos").files;
+  if (!files.length) return;
+  cropIdx = (cropIdx + delta + files.length) % files.length;
+  loadCropPhoto(cropIdx);
+}
+
+async function loadCropPhoto(idx) {
+  const files = document.getElementById("tilePhotos").files;
+  if (!files.length) return;
+  document.getElementById("cropCounter").innerText = `Photo ${idx + 1} / ${files.length}`;
+  document.getElementById("cropSavedBadge").innerText = manualCorners[idx] ? "✓ Manual Saved" : "Auto";
+
+  const file = files[idx];
+  const url = URL.createObjectURL(file);
+  cropImg.onload = async () => {
+    URL.revokeObjectURL(url);
+    const maxW = 750;
+    const s = Math.min(1, maxW / cropImg.width);
+    cropCanvas.width = Math.round(cropImg.width * s);
+    cropCanvas.height = Math.round(cropImg.height * s);
+
+    if (manualCorners[idx]) {
+      curCorners = manualCorners[idx].map(p => [...p]);
+      drawCrop();
+    } else {
+      curCorners = [[0.12, 0.12], [0.88, 0.12], [0.88, 0.88], [0.12, 0.88]];
+      drawCrop();
+      await autoDetectCurrentCrop();
+    }
+  };
+  cropImg.src = url;
+}
+
+async function autoDetectCurrentCrop() {
+  const files = document.getElementById("tilePhotos").files;
+  if (!files.length) return;
+  const opt = await resizeImageBlob(files[cropIdx], 800);
+  const fd = new FormData();
+  fd.append("photo", opt);
+  try {
+    const res = await fetch("/detect_corners", { method: "POST", body: fd });
+    const data = await res.json();
+    if (data.corners && data.corners.length === 4) {
+      curCorners = data.corners;
+      drawCrop();
+    }
+  } catch (e) {}
+}
+
+function resetFullCrop() {
+  curCorners = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+  manualCorners[cropIdx] = curCorners.map(p => [...p]);
+  document.getElementById("cropSavedBadge").innerText = "✓ Manual Saved";
+  drawCrop();
+}
+
+function applyCropToAll() {
+  const files = document.getElementById("tilePhotos").files;
+  if (!files.length) return;
+  for (let i = 0; i < files.length; i++) {
+    manualCorners[i] = curCorners.map(p => [...p]);
+  }
+  document.getElementById("cropSavedBadge").innerText = `✓ Sabhi ${files.length} par Saved!`;
+  alert(`Badhai! Ye crop sabhi ${files.length} photos par apply ho gaya hai!`);
+}
+
+function saveAndNextCrop() {
+  manualCorners[cropIdx] = curCorners.map(p => [...p]);
+  document.getElementById("cropSavedBadge").innerText = "✓ Manual Saved";
+  const files = document.getElementById("tilePhotos").files;
+  if (cropIdx + 1 < files.length) stepCropPhoto(1);
+}
+
+function drawCrop() {
+  const cw = cropCanvas.width, ch = cropCanvas.height;
+  cropCtx.clearRect(0, 0, cw, ch);
+  cropCtx.drawImage(cropImg, 0, 0, cw, ch);
+
+  cropCtx.save();
+  cropCtx.beginPath();
+  cropCtx.rect(0, 0, cw, ch);
+  cropCtx.moveTo(curCorners[0][0] * cw, curCorners[0][1] * ch);
+  cropCtx.lineTo(curCorners[1][0] * cw, curCorners[1][1] * ch);
+  cropCtx.lineTo(curCorners[2][0] * cw, curCorners[2][1] * ch);
+  cropCtx.lineTo(curCorners[3][0] * cw, curCorners[3][1] * ch);
+  cropCtx.closePath();
+  cropCtx.fillStyle = "rgba(0, 0, 0, 0.45)";
+  cropCtx.fill("evenodd");
+  cropCtx.restore();
+
+  cropCtx.beginPath();
+  cropCtx.moveTo(curCorners[0][0] * cw, curCorners[0][1] * ch);
+  for (let i = 1; i < 4; i++) cropCtx.lineTo(curCorners[i][0] * cw, curCorners[i][1] * ch);
+  cropCtx.closePath();
+  cropCtx.strokeStyle = "#22c55e";
+  cropCtx.lineWidth = Math.max(3, cw * 0.006);
+  cropCtx.stroke();
+
+  const rad = Math.max(14, cw * 0.032);
+  curCorners.forEach((pt, i) => {
+    cropCtx.beginPath();
+    cropCtx.arc(pt[0] * cw, pt[1] * ch, rad, 0, Math.PI * 2);
+    cropCtx.fillStyle = activeCorner === i ? "#ef4444" : "#22c55e";
+    cropCtx.fill();
+    cropCtx.lineWidth = 3;
+    cropCtx.strokeStyle = "#ffffff";
+    cropCtx.stroke();
+  });
+}
+
+function startCornerDrag(cx, cy) {
+  const p = getNormPos(cropCanvas, cx, cy);
+  let best = -1, bestD = 0.12;
+  curCorners.forEach((pt, i) => {
+    const d = Math.hypot(pt[0] - p.x, pt[1] - p.y);
+    if (d < bestD) { bestD = d; best = i; }
+  });
+  activeCorner = best;
+}
+
+function moveCornerDrag(cx, cy) {
+  if (activeCorner < 0) return;
+  const p = getNormPos(cropCanvas, cx, cy);
+  curCorners[activeCorner] = [p.x, p.y];
+  manualCorners[cropIdx] = curCorners.map(pt => [...pt]);
+  document.getElementById("cropSavedBadge").innerText = "✓ Manual Saved";
+  drawCrop();
+}
+
+function endCornerDrag() { activeCorner = -1; drawCrop(); }
+
+cropCanvas.addEventListener("mousedown", e => startCornerDrag(e.clientX, e.clientY));
+cropCanvas.addEventListener("mousemove", e => moveCornerDrag(e.clientX, e.clientY));
+window.addEventListener("mouseup", endCornerDrag);
+cropCanvas.addEventListener("touchstart", e => { e.preventDefault(); startCornerDrag(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+cropCanvas.addEventListener("touchmove", e => { e.preventDefault(); moveCornerDrag(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+window.addEventListener("touchend", endCornerDrag);
+
+function resizeImageBlob(file, maxDim = 1500) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let w = img.width, h = img.height;
+      if (Math.max(w, h) <= maxDim) return resolve(file);
+      const scale = maxDim / Math.max(w, h);
+      w = Math.round(w * scale);
+      h = Math.round(h * scale);
+      const c = document.createElement("canvas");
+      c.width = w; c.height = h;
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
+      c.toBlob((blob) => {
+        resolve(new File([blob], file.name, { type: "image/jpeg" }));
+      }, "image/jpeg", 0.90);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
+async function generateCatalog() {
+  const files = document.getElementById("tilePhotos").files;
+  if (!files.length) return alert("Kam se kam 1 tile photo chunein!");
+  if (!boxes.length) return alert("Kam se kam 1 photo box set karein!");
+
+  const btn = document.getElementById("genBtn");
+  const status = document.getElementById("status");
+  btn.disabled = true;
+
+  const deltas = boxes.map((b, i) => {
+    const base = autoBaseBoxes[i];
+    if (!base) return { dx: 0, dy: 0, dw: 0, dh: 0 };
+    return { dx: b.x - base.x, dy: b.y - base.y, dw: b.w - base.w, dh: b.h - base.h };
+  });
+
+  const fd = new FormData();
+  fd.append("session_id", sessionId);
+  fd.append("template_idx", activeSlideIdx);
+  fd.append("fill_mode", document.getElementById("fillMode").value);
+  fd.append("auto_frame_fit", document.getElementById("autoFrameFit").checked);
+  fd.append("boxes_json", JSON.stringify(boxes));
+  fd.append("deltas_json", JSON.stringify(deltas));
+  fd.append("manual_corners_json", JSON.stringify(manualCorners));
+  fd.append("perspective", document.getElementById("usePerspective").checked);
+  fd.append("crop_mode", document.getElementById("cropMode").value);
+
+  for (let i = 0; i < files.length; i++) {
+    status.innerText = `Photo ${i + 1} / ${files.length} tayyar ho rahi hai...`;
+    const optFile = await resizeImageBlob(files[i]);
+    fd.append("photos", optFile);
+  }
+
+  status.innerText = "PowerPoint ban rahi hai, kripya intezaar karein...";
+  try {
+    const res = await fetch("/generate", { method: "POST", body: fd });
+    if (!res.ok) throw new Error("Server error");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "Tiles_Catalog_Final.pptx";
+    a.click();
+    status.innerText = "Badhai ho! Aapka Catalog bilkul perfect download ho gaya!";
+  } catch (e) {
+    status.innerText = "Error aaya! Agar photos 80+ hain toh 40-40 ke batch me try karein.";
+  }
+  btn.disabled = false;
+}
+</script>
+</body>
+</html>
